@@ -56,6 +56,7 @@ import (
 
 	traceapi "cloud.google.com/go/trace/apiv2"
 	"contrib.go.opencensus.io/exporter/stackdriver/monitoredresource"
+	"go.opencensus.io/resource"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 	"go.opencensus.io/trace"
@@ -69,8 +70,19 @@ type Options struct {
 	// ProjectID is the identifier of the Stackdriver
 	// project the user is uploading the stats data to.
 	// If not set, this will default to your "Application Default Credentials".
-	// For details see: https://developers.google.com/accounts/docs/application-default-credentials
+	// For details see: https://developers.google.com/accounts/docs/application-default-credentials.
+	//
+	// It will be used in the project_id label of a Stackdriver monitored
+	// resource if the resource does not inherently belong to a specific
+	// project, e.g. on-premise resource like k8s_container or generic_task.
 	ProjectID string
+
+	// Location is the identifier of the GCP or AWS cloud region/zone in which
+	// the data for a resource is stored.
+	// It will be used in the location label of a Stackdriver monitored resource
+	// if the resource does not inherently belong to a specific project, e.g.
+	// on-premise resource like k8s_container or generic_task.
+	Location string
 
 	// OnError is the hook to be called when there is
 	// an error uploading the stats or tracing data.
@@ -142,6 +154,21 @@ type Options struct {
 	// Resource field.
 	// Optional, but encouraged.
 	MonitoredResource monitoredresource.Interface
+
+	// ResourceDetector provides a hook to discover arbitrary resource information.
+	//
+	// The translation function provided in MapResource must be able to conver the
+	// the resource information to a Stackdriver monitored resource.
+	//
+	// If this field is unset, resource type and tags will automatically be discovered through
+	// the OC_RESOURCE_TYPE and OC_RESOURCE_TAGS environment variables.
+	ResourceDetector resource.Detector
+
+	// MapResource converts a OpenCensus resource to a Stackdriver monitored resource.
+	//
+	// If this field is unset, DefaultMapResource will be used which encodes a set of default
+	// conversions from auto-detected resources to well-known Stackdriver monitored resources.
+	MapResource func(*resource.Resource) *monitoredrespb.MonitoredResource
 
 	// MetricPrefix overrides the prefix of a Stackdriver metric display names.
 	// Optional. If unset defaults to "OpenCensus/".
@@ -238,6 +265,25 @@ func NewExporter(o Options) (*Exporter, error) {
 
 	if o.MonitoredResource != nil {
 		o.Resource = convertMonitoredResourceToPB(o.MonitoredResource)
+	}
+	if o.MapResource == nil {
+		o.MapResource = DefaultMapResource
+	}
+	if o.ResourceDetector != nil {
+		// For backwards-compatibility we still respect the deprecated resource field.
+		if o.Resource != nil {
+			return nil, errors.New("stackdriver: ResourceDetector must not be used in combination with deprecated resource fields")
+		}
+		res, err := o.ResourceDetector(o.Context)
+		if err != nil {
+			return nil, fmt.Errorf("stackdriver: detect resource: %s", err)
+		}
+		o.Resource = o.MapResource(res)
+
+		// Populate internal resource labels for defaulting project_id and location
+		// labels of applicable monitored resources.
+		o.Resource.Labels[stackdriverProjectID] = o.ProjectID
+		o.Resource.Labels[stackdriverLocation] = o.Location
 	}
 
 	se, err := newStatsExporter(o)

@@ -25,14 +25,13 @@ import (
 	"sync"
 	"time"
 
-	"go.opencensus.io"
+	monitoring "cloud.google.com/go/monitoring/apiv3"
+	"github.com/golang/protobuf/ptypes/timestamp"
+	opencensus "go.opencensus.io"
 	"go.opencensus.io/stats"
 	"go.opencensus.io/stats/view"
 	"go.opencensus.io/tag"
 	"go.opencensus.io/trace"
-
-	"cloud.google.com/go/monitoring/apiv3"
-	"github.com/golang/protobuf/ptypes/timestamp"
 	"google.golang.org/api/option"
 	"google.golang.org/api/support/bundler"
 	distributionpb "google.golang.org/genproto/googleapis/api/distribution"
@@ -191,6 +190,7 @@ func (e *statsExporter) uploadStats(vds []*view.Data) error {
 }
 
 func (e *statsExporter) makeReq(vds []*view.Data, limit int) []*monitoringpb.CreateTimeSeriesRequest {
+	fmt.Println("make req", e.o.Resource, vds)
 	var reqs []*monitoringpb.CreateTimeSeriesRequest
 	var timeSeries []*monitoringpb.TimeSeries
 	for _, vd := range vds {
@@ -201,7 +201,7 @@ func (e *statsExporter) makeReq(vds []*view.Data, limit int) []*monitoringpb.Cre
 					Type:   e.metricType(vd.View),
 					Labels: newLabels(e.defaultLabels, tags),
 				},
-				Resource: resource,
+				Resource: e.o.Resource,
 				Points:   []*monitoringpb.Point{newPoint(vd.View, row, vd.Start, vd.End)},
 			}
 			timeSeries = append(timeSeries, ts)
