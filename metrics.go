@@ -20,23 +20,107 @@ directly to Stackdriver Metrics.
 */
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path"
 
 	"github.com/golang/protobuf/ptypes/timestamp"
 
+	monitoring "cloud.google.com/go/monitoring/apiv3"
 	distributionpb "google.golang.org/genproto/googleapis/api/distribution"
 	labelpb "google.golang.org/genproto/googleapis/api/label"
 	googlemetricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
 	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
 
+	commonpb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/common/v1"
 	metricspb "github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1"
 	resourcepb "github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1"
 )
 
 var errNilMetric = errors.New("expecting a non-nil metric")
+
+// ExportMetric exports OpenCensus Metrics to Stackdriver Monitoring.
+func (se *statsExporter) ExportMetric(ctx context.Context, node *commonpb.Node, rsc *resourcepb.Resource, metric *metricspb.Metric) error {
+	if metric == nil {
+		return errNilMetric
+	}
+
+	ctsreq, err := se.protoMetricToCreateTimeSeriesRequest(ctx, node, rsc, metric)
+	if err != nil {
+		return err
+	}
+
+	// Now create the metric descriptor remotely.
+	if err := se.createMetricDescriptorRemotely(ctx, metric); err != nil {
+		return err
+	}
+
+	return createTimeSeries(ctx, se.c, ctsreq)
+}
+
+// protoMetricToCreateTimeSeriesRequest converts a metric into a Stackdriver Monitoring v3 API CreateTimeSeriesRequest
+// but it doesn't invoke any remote API.
+func (se *statsExporter) protoMetricToCreateTimeSeriesRequest(ctx context.Context, node *commonpb.Node, rsc *resourcepb.Resource, metric *metricspb.Metric) (*monitoringpb.CreateTimeSeriesRequest, error) {
+	if metric == nil {
+		return nil, errNilMetric
+	}
+
+	var resource = rsc
+	if metric.Resource != nil {
+		resource = metric.Resource
+	}
+
+	timeSeries := make([]*monitoringpb.TimeSeries, 0, len(metric.Timeseries))
+	for _, protoTimeSeries := range metric.Timeseries {
+		sdPoints, err := se.protoTimeSeriesToMonitoringPoints(protoTimeSeries)
+		if err != nil {
+			return nil, err
+		}
+
+		sdResource := protoResourceToMonitoredResource(resource)
+		timeSeries = append(timeSeries, &monitoringpb.TimeSeries{
+			// Metric was already filled in by each point conversion.
+			Resource: sdResource,
+			Points:   sdPoints,
+		})
+	}
+
+	ctsreq := &monitoringpb.CreateTimeSeriesRequest{
+		Name:       monitoring.MetricProjectPath(se.o.ProjectID),
+		TimeSeries: timeSeries,
+	}
+
+	return ctsreq, nil
+}
+
+// createMetricDescriptorRemotely creates a metric descriptor from the OpenCensus proto metric
+// and then creates it remotely using Stackdriver's API.
+func (se *statsExporter) createMetricDescriptorRemotely(ctx context.Context, metric *metricspb.Metric) error {
+	inMD, err := se.protoToMonitoringMetricDescriptor(metric)
+	if err != nil {
+		return err
+	}
+
+	cmrdesc := &monitoringpb.CreateMetricDescriptorRequest{
+		Name:             fmt.Sprintf("projects/%s", se.o.ProjectID),
+		MetricDescriptor: inMD,
+	}
+	_, err = createMetricDescriptor(ctx, se.c, cmrdesc)
+	return err
+}
+
+func (se *statsExporter) protoTimeSeriesToMonitoringPoints(ts *metricspb.TimeSeries) (sptl []*monitoringpb.Point, err error) {
+	for _, pt := range ts.Points {
+		spt, err := fromProtoPoint(ts.StartTimestamp, pt)
+		if err != nil {
+			return nil, err
+		}
+		sptl = append(sptl, spt)
+	}
+	return sptl, nil
+}
 
 func (se *statsExporter) protoToMonitoringMetricDescriptor(metric *metricspb.Metric) (*googlemetricpb.MetricDescriptor, error) {
 	if metric == nil {
