@@ -41,6 +41,7 @@ import (
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
 	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
+	metricspb "github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1"
 )
 
 const (
@@ -60,6 +61,9 @@ type statsExporter struct {
 
 	createdViewsMu sync.Mutex
 	createdViews   map[string]*metricpb.MetricDescriptor // Views already created remotely
+
+	protoMu                sync.Mutex
+	protoMetricDescriptors map[*metricspb.Metric]bool // Saves the metric descriptors that were already created remotely
 
 	c             *monitoring.MetricClient
 	defaultLabels map[string]labelValue
@@ -85,9 +89,10 @@ func newStatsExporter(o Options) (*statsExporter, error) {
 		return nil, err
 	}
 	e := &statsExporter{
-		c:            client,
-		o:            o,
-		createdViews: make(map[string]*metricpb.MetricDescriptor),
+		c:                      client,
+		o:                      o,
+		createdViews:           make(map[string]*metricpb.MetricDescriptor),
+		protoMetricDescriptors: make(map[*metricspb.Metric]bool),
 	}
 
 	if o.DefaultMonitoringLabels != nil {

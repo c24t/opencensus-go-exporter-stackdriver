@@ -98,6 +98,15 @@ func (se *statsExporter) protoMetricToCreateTimeSeriesRequest(ctx context.Contex
 // createMetricDescriptorRemotely creates a metric descriptor from the OpenCensus proto metric
 // and then creates it remotely using Stackdriver's API.
 func (se *statsExporter) createMetricDescriptorRemotely(ctx context.Context, metric *metricspb.Metric) error {
+	se.protoMu.Lock()
+	defer se.protoMu.Unlock()
+
+	if _, created := se.protoMetricDescriptors[metric]; created {
+		return nil
+	}
+
+	// Otherwise, we encountered a cache-miss and
+	// should create the metric descriptor remotely.
 	inMD, err := se.protoToMonitoringMetricDescriptor(metric)
 	if err != nil {
 		return err
@@ -108,6 +117,10 @@ func (se *statsExporter) createMetricDescriptorRemotely(ctx context.Context, met
 		MetricDescriptor: inMD,
 	}
 	_, err = createMetricDescriptor(ctx, se.c, cmrdesc)
+
+	// Now record the metric as having been created.
+	se.protoMetricDescriptors[metric] = true
+
 	return err
 }
 
