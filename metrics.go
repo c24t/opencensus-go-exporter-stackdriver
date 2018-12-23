@@ -43,11 +43,12 @@ var errNilMetric = errors.New("expecting a non-nil metric")
 
 // ExportMetric exports OpenCensus Metrics to Stackdriver Monitoring.
 func (se *statsExporter) ExportMetric(ctx context.Context, node *commonpb.Node, rsc *resourcepb.Resource, metric *metricspb.Metric) error {
+	// TODO: (@odeke-em) trace this method itself.
 	if metric == nil {
 		return errNilMetric
 	}
 
-	ctsreq, err := se.protoMetricToCreateTimeSeriesRequest(ctx, node, rsc, metric)
+	ctsreql, err := se.protoMetricToCreateTimeSeriesRequest(ctx, node, rsc, metric, maxTimeSeriesPerUpload)
 	if err != nil {
 		return err
 	}
@@ -57,12 +58,16 @@ func (se *statsExporter) ExportMetric(ctx context.Context, node *commonpb.Node, 
 		return err
 	}
 
-	return createTimeSeries(ctx, se.c, ctsreq)
+	// For each batch
+	for _, ctsreq := range ctsreql {
+		_ = createTimeSeries(ctx, se.c, ctsreq)
+	}
+	return nil
 }
 
 // protoMetricToCreateTimeSeriesRequest converts a metric into a Stackdriver Monitoring v3 API CreateTimeSeriesRequest
 // but it doesn't invoke any remote API.
-func (se *statsExporter) protoMetricToCreateTimeSeriesRequest(ctx context.Context, node *commonpb.Node, rsc *resourcepb.Resource, metric *metricspb.Metric) (*monitoringpb.CreateTimeSeriesRequest, error) {
+func (se *statsExporter) protoMetricToCreateTimeSeriesRequest(ctx context.Context, node *commonpb.Node, rsc *resourcepb.Resource, metric *metricspb.Metric, limit int) ([]*monitoringpb.CreateTimeSeriesRequest, error) {
 	if metric == nil {
 		return nil, errNilMetric
 	}
@@ -72,7 +77,9 @@ func (se *statsExporter) protoMetricToCreateTimeSeriesRequest(ctx context.Contex
 		resource = metric.Resource
 	}
 
-	timeSeries := make([]*monitoringpb.TimeSeries, 0, len(metric.Timeseries))
+	n := len(metric.Timeseries)
+	batches := make([][]*monitoringpb.TimeSeries, 0, n)
+	timeSeries := make([]*monitoringpb.TimeSeries, 0, n)
 	for _, protoTimeSeries := range metric.Timeseries {
 		sdPoints, err := se.protoTimeSeriesToMonitoringPoints(protoTimeSeries)
 		if err != nil {
@@ -85,14 +92,31 @@ func (se *statsExporter) protoMetricToCreateTimeSeriesRequest(ctx context.Contex
 			Resource: sdResource,
 			Points:   sdPoints,
 		})
+
+		// Using == for comparison here handles the case of
+		// limit in (-inf, 0], for which case all the timeseries
+		// will be placed in a single batch.
+		if len(timeSeries) > 0 && len(timeSeries) == limit {
+			batches = append(batches, timeSeries[:])
+			timeSeries = timeSeries[:0]
+		}
 	}
 
-	ctsreq := &monitoringpb.CreateTimeSeriesRequest{
-		Name:       monitoring.MetricProjectPath(se.o.ProjectID),
-		TimeSeries: timeSeries,
+	// For any residual timeSeries that weren't batched up,
+	// now just add them in too.
+	if len(timeSeries) > 0 {
+		batches = append(batches, timeSeries[:])
 	}
 
-	return ctsreq, nil
+	var ctsreql []*monitoringpb.CreateTimeSeriesRequest
+	for _, batch := range batches {
+		ctsreql = append(ctsreql, &monitoringpb.CreateTimeSeriesRequest{
+			Name:       monitoring.MetricProjectPath(se.o.ProjectID),
+			TimeSeries: batch[:],
+		})
+	}
+
+	return ctsreql, nil
 }
 
 // createMetricDescriptorRemotely creates a metric descriptor from the OpenCensus proto metric

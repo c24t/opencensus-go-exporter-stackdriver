@@ -91,7 +91,7 @@ func TestProtoMetricToCreateTimeSeriesRequest(t *testing.T) {
 
 	tests := []struct {
 		in            *metricspb.Metric
-		want          *monitoringpb.CreateTimeSeriesRequest
+		want          []*monitoringpb.CreateTimeSeriesRequest
 		wantErr       string
 		statsExporter *statsExporter
 	}{
@@ -135,27 +135,29 @@ func TestProtoMetricToCreateTimeSeriesRequest(t *testing.T) {
 			statsExporter: &statsExporter{
 				o: Options{ProjectID: "foo"},
 			},
-			want: &monitoringpb.CreateTimeSeriesRequest{
-				Name: "projects/foo",
-				TimeSeries: []*monitoringpb.TimeSeries{
-					{
-						Points: []*monitoringpb.Point{
-							{
-								Interval: &monitoringpb.TimeInterval{
-									StartTime: startTimestamp,
-									EndTime:   endTimestamp,
-								},
-								Value: &monitoringpb.TypedValue{
-									Value: &monitoringpb.TypedValue_DistributionValue{
-										DistributionValue: &distributionpb.Distribution{
-											Count:                 1,
-											Mean:                  11.9,
-											SumOfSquaredDeviation: 0,
-											BucketCounts:          []int64{0, 1, 0, 0, 0},
-											BucketOptions: &distributionpb.Distribution_BucketOptions{
-												Options: &distributionpb.Distribution_BucketOptions_ExplicitBuckets{
-													ExplicitBuckets: &distributionpb.Distribution_BucketOptions_Explicit{
-														Bounds: []float64{0, 10, 20, 30, 40},
+			want: []*monitoringpb.CreateTimeSeriesRequest{
+				{
+					Name: "projects/foo",
+					TimeSeries: []*monitoringpb.TimeSeries{
+						{
+							Points: []*monitoringpb.Point{
+								{
+									Interval: &monitoringpb.TimeInterval{
+										StartTime: startTimestamp,
+										EndTime:   endTimestamp,
+									},
+									Value: &monitoringpb.TypedValue{
+										Value: &monitoringpb.TypedValue_DistributionValue{
+											DistributionValue: &distributionpb.Distribution{
+												Count:                 1,
+												Mean:                  11.9,
+												SumOfSquaredDeviation: 0,
+												BucketCounts:          []int64{0, 1, 0, 0, 0},
+												BucketOptions: &distributionpb.Distribution_BucketOptions{
+													Options: &distributionpb.Distribution_BucketOptions_ExplicitBuckets{
+														ExplicitBuckets: &distributionpb.Distribution_BucketOptions_Explicit{
+															Bounds: []float64{0, 10, 20, 30, 40},
+														},
 													},
 												},
 											},
@@ -175,7 +177,7 @@ func TestProtoMetricToCreateTimeSeriesRequest(t *testing.T) {
 		if se == nil {
 			se = new(statsExporter)
 		}
-		got, err := se.protoMetricToCreateTimeSeriesRequest(context.Background(), nil, nil, tt.in)
+		got, err := se.protoMetricToCreateTimeSeriesRequest(context.Background(), nil, nil, tt.in, -1)
 
 		if tt.wantErr != "" {
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {

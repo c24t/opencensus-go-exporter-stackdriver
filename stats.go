@@ -32,6 +32,7 @@ import (
 	"go.opencensus.io/trace"
 
 	"cloud.google.com/go/monitoring/apiv3"
+	metricspb "github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1"
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"google.golang.org/api/option"
 	"google.golang.org/api/support/bundler"
@@ -41,7 +42,6 @@ import (
 	metricpb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredrespb "google.golang.org/genproto/googleapis/api/monitoredres"
 	monitoringpb "google.golang.org/genproto/googleapis/monitoring/v3"
-	metricspb "github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1"
 )
 
 const (
