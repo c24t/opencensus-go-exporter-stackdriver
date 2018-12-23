@@ -21,6 +21,7 @@ directly to Stackdriver Metrics.
 
 import (
 	"context"
+        "log"
 	"errors"
 	"fmt"
 	"path"
@@ -77,6 +78,10 @@ func (se *statsExporter) protoMetricToCreateTimeSeriesRequest(ctx context.Contex
 		resource = metric.Resource
 	}
 
+	metricName, _, _, _ := metricProseFromProto(metric)
+	metricType, _ := se.metricTypeFromProto(metricName)
+	metricLabelKeys := metric.GetMetricDescriptor().GetLabelKeys()
+
 	n := len(metric.Timeseries)
 	batches := make([][]*monitoringpb.TimeSeries, 0, n)
 	timeSeries := make([]*monitoringpb.TimeSeries, 0, n)
@@ -86,10 +91,19 @@ func (se *statsExporter) protoMetricToCreateTimeSeriesRequest(ctx context.Contex
 			return nil, err
 		}
 
-		sdResource := protoResourceToMonitoredResource(resource)
+		// Each TimeSeries has labelValues which MUST be correlated
+		// with that from the MetricDescriptor
+		// TODO: (@odeke-em) perhaps log this error from labels extraction, if non-nil.
+		labels, err := labelsPerTimeSeries(se.defaultLabels, metricLabelKeys, protoTimeSeries.GetLabelValues())
+                if err != nil {
+                    log.Printf("labels error: %v\n", err)
+                }
 		timeSeries = append(timeSeries, &monitoringpb.TimeSeries{
-			// Metric was already filled in by each point conversion.
-			Resource: sdResource,
+			Metric: &googlemetricpb.Metric{
+				Type:   metricType,
+				Labels: labels,
+			},
+			Resource: protoResourceToMonitoredResource(resource),
 			Points:   sdPoints,
 		})
 
@@ -117,6 +131,26 @@ func (se *statsExporter) protoMetricToCreateTimeSeriesRequest(ctx context.Contex
 	}
 
 	return ctsreql, nil
+}
+
+func labelsPerTimeSeries(defaults map[string]labelValue, labelKeys []*metricspb.LabelKey, labelValues []*metricspb.LabelValue) (map[string]string, error) {
+	labels := make(map[string]string)
+	// Fill in the defaults firstly, irrespective of if the labelKeys and labelValues are mismatched.
+	for key, label := range defaults {
+		labels[sanitize(key)] = label.val
+	}
+
+	// Perform this sanity check now.
+	if len(labelKeys) != len(labelValues) {
+		return labels, fmt.Errorf("Length mismatch: len(labelKeys)=%d len(labelValues)=%d", len(labelKeys), len(labelValues))
+	}
+
+	for i, labelKey := range labelKeys {
+		labelValue := labelValues[i]
+		labels[sanitize(labelKey.GetKey())] = labelValue.GetValue()
+	}
+
+	return labels, nil
 }
 
 // createMetricDescriptorRemotely creates a metric descriptor from the OpenCensus proto metric

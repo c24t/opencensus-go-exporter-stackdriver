@@ -140,6 +140,9 @@ func TestProtoMetricToCreateTimeSeriesRequest(t *testing.T) {
 					Name: "projects/foo",
 					TimeSeries: []*monitoringpb.TimeSeries{
 						{
+							Metric: &googlemetricpb.Metric{
+								Type: "custom.googleapis.com/opencensus/with_metric_descriptor",
+							},
 							Points: []*monitoringpb.Point{
 								{
 									Interval: &monitoringpb.TimeInterval{
