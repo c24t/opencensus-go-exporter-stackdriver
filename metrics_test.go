@@ -36,7 +36,7 @@ func TestProtoResourceToMonitoringResource(t *testing.T) {
 		in   *resourcepb.Resource
 		want *monitoredrespb.MonitoredResource
 	}{
-		{in: nil, want: nil},
+		{in: nil, want: &monitoredresp.MonitoredResource{Type: "global"}},
 		{in: &resourcepb.Resource{}, want: &monitoredrespb.MonitoredResource{}},
 		{
 			in: &resourcepb.Resource{
@@ -142,6 +142,9 @@ func TestProtoMetricToCreateTimeSeriesRequest(t *testing.T) {
 						{
 							Metric: &googlemetricpb.Metric{
 								Type: "custom.googleapis.com/opencensus/with_metric_descriptor",
+							},
+							Resource: &monitoredrespb.MonitoredResource{
+								Type: "global",
 							},
 							Points: []*monitoringpb.Point{
 								{

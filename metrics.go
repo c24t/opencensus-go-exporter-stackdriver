@@ -21,7 +21,6 @@ directly to Stackdriver Metrics.
 
 import (
 	"context"
-        "log"
 	"errors"
 	"fmt"
 	"path"
@@ -94,10 +93,7 @@ func (se *statsExporter) protoMetricToCreateTimeSeriesRequest(ctx context.Contex
 		// Each TimeSeries has labelValues which MUST be correlated
 		// with that from the MetricDescriptor
 		// TODO: (@odeke-em) perhaps log this error from labels extraction, if non-nil.
-		labels, err := labelsPerTimeSeries(se.defaultLabels, metricLabelKeys, protoTimeSeries.GetLabelValues())
-                if err != nil {
-                    log.Printf("labels error: %v\n", err)
-                }
+		labels, _ := labelsPerTimeSeries(se.defaultLabels, metricLabelKeys, protoTimeSeries.GetLabelValues())
 		timeSeries = append(timeSeries, &monitoringpb.TimeSeries{
 			Metric: &googlemetricpb.Metric{
 				Type:   metricType,
@@ -398,7 +394,9 @@ func protoMetricDescriptorTypeToMetricKind(m *metricspb.Metric) (googlemetricpb.
 
 func protoResourceToMonitoredResource(rsp *resourcepb.Resource) *monitoredrespb.MonitoredResource {
 	if rsp == nil {
-		return nil
+		return &monitoredrespb.MonitoredResource{
+			Type: "global",
+		}
 	}
 	mrsp := &monitoredrespb.MonitoredResource{
 		Type: rsp.Type,
