@@ -56,8 +56,10 @@ var userAgent = fmt.Sprintf("opencensus-go %s; stackdriver-exporter %s", opencen
 
 // statsExporter exports stats to the Stackdriver Monitoring.
 type statsExporter struct {
-	bundler *bundler.Bundler
-	o       Options
+	o Options
+
+	viewDataBundler     *bundler.Bundler
+	protoMetricsBundler *bundler.Bundler
 
 	createdViewsMu sync.Mutex
 	createdViews   map[string]*metricpb.MetricDescriptor // Views already created remotely
@@ -102,15 +104,22 @@ func newStatsExporter(o Options) (*statsExporter, error) {
 			opencensusTaskKey: {val: getTaskValue(), desc: opencensusTaskDescription},
 		}
 	}
-	e.bundler = bundler.NewBundler((*view.Data)(nil), func(bundle interface{}) {
+
+	e.viewDataBundler = bundler.NewBundler((*view.Data)(nil), func(bundle interface{}) {
 		vds := bundle.([]*view.Data)
 		e.handleUpload(vds...)
 	})
-	if e.o.BundleDelayThreshold > 0 {
-		e.bundler.DelayThreshold = e.o.BundleDelayThreshold
+	e.protoMetricsBundler = bundler.NewBundler((*metricPayload)(nil), func(bundle interface{}) {
+		payloads := bundle.([]*metricPayload)
+		e.handleMetricsUpload(payloads)
+	})
+	if delayThreshold := e.o.BundleDelayThreshold; delayThreshold > 0 {
+		e.viewDataBundler.DelayThreshold = delayThreshold
+		e.protoMetricsBundler.DelayThreshold = delayThreshold
 	}
-	if e.o.BundleCountThreshold > 0 {
-		e.bundler.BundleCountThreshold = e.o.BundleCountThreshold
+	if countThreshold := e.o.BundleCountThreshold; countThreshold > 0 {
+		e.viewDataBundler.BundleCountThreshold = countThreshold
+		e.protoMetricsBundler.BundleCountThreshold = countThreshold
 	}
 	return e, nil
 }
@@ -136,7 +145,7 @@ func (e *statsExporter) ExportView(vd *view.Data) {
 	if len(vd.Rows) == 0 {
 		return
 	}
-	err := e.bundler.Add(vd, 1)
+	err := e.viewDataBundler.Add(vd, 1)
 	switch err {
 	case nil:
 		return
@@ -170,10 +179,8 @@ func (e *statsExporter) handleUpload(vds ...*view.Data) {
 // This is useful if your program is ending and you do not
 // want to lose recent spans.
 func (e *statsExporter) Flush() {
-	e.bundler.Flush()
-}
-
-func (e *statsExporter) transformViewDataToMonitoringPb(vd *view.Data) {
+	e.viewDataBundler.Flush()
+	e.protoMetricsBundler.Flush()
 }
 
 func (e *statsExporter) uploadStats(vds []*view.Data) error {

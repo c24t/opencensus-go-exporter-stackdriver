@@ -31,9 +31,6 @@ import (
 	agentmetricspb "github.com/census-instrumentation/opencensus-proto/gen-go/agent/metrics/v1"
 )
 
-func TestContinuousExport(t *testing.T) {
-}
-
 func TestStatsAndMetricsEquivalence(t *testing.T) {
 	ma, addr, stop := createMockAgent(t)
 	defer stop()
@@ -50,53 +47,66 @@ func TestStatsAndMetricsEquivalence(t *testing.T) {
 	endTime := startTime.Add(100 * time.Millisecond)
 	mLatencyMs := stats.Float64("latency", "The latency for various methods", "ms")
 
-	vd := &view.Data{
-		Start: startTime,
-		End:   endTime,
-		View: &view.View{
-			Name:        "ocagent.io/latency",
-			Description: "The latency of the various methods",
-			Aggregation: view.Distribution(0, 100, 200, 500, 800, 1000),
-			Measure:     mLatencyMs,
-		},
-		Rows: []*view.Row{
-			{
-				Data: &view.CountData{Value: 4},
+	var vdl []*view.Data
+	for i := 0; i < 100; i++ {
+		vdl = append(vdl, &view.Data{
+			Start: startTime,
+			End:   endTime,
+			View: &view.View{
+				Name:        "ocagent.io/latency",
+				Description: "The latency of the various methods",
+				Aggregation: view.Distribution(0, 100, 200, 500, 800, 1000),
+				Measure:     mLatencyMs,
 			},
-		},
-	}
-	oce.ExportView(vd)
-	oce.Flush()
-
-	time.Sleep(100 * time.Millisecond)
-	oce.Flush()
-
-	var last *agentmetricspb.ExportMetricsServiceRequest
-	ma.forEachRequest(func(emr *agentmetricspb.ExportMetricsServiceRequest) {
-		last = emr
-	})
-
-	if last == nil || len(last.Metrics) == 0 {
-		t.Fatal("Failed to retrieve any metrics")
+			Rows: []*view.Row{
+				{
+					Data: &view.CountData{Value: 4},
+				},
+			},
+		})
 	}
 
-	se := &statsExporter{
-		o: Options{ProjectID: "equivalence"},
-	}
+	for i, vd := range vdl {
+		oce.ExportView(vd)
+		oce.Flush()
 
-	ctx := context.Background()
-	sMD, err := se.viewToMetricDescriptor(ctx, vd.View)
-	pMD, err := se.protoMetricDescriptorToCreateMetricDescriptorRequest(ctx, last.Metrics[0])
-	if !reflect.DeepEqual(sMD, pMD) {
-		t.Errorf("MetricDescriptor Mismatch\nStats MetricDescriptor:\n\t%v\nProto MetricDescriptor:\n\t%v\n", sMD, pMD)
-	}
+		time.Sleep(30 * time.Millisecond)
+		oce.Flush()
 
-        vdl := []*view.Data{vd}
-        sctreql := se.makeReq(vdl, 1)
-        pctreql, _ := se.protoMetricToCreateTimeSeriesRequest(ctx, last.Node, last.Resource, last.Metrics[0], 1)
-        if !reflect.DeepEqual(sctreql, pctreql) {
-		t.Errorf("TimeSeries Mismatch\nStats MetricDescriptor:\n\t%v\nProto MetricDescriptor:\n\t%v\n", sctreql, pctreql)
-        }
+		var last *agentmetricspb.ExportMetricsServiceRequest
+		ma.forEachRequest(func(emr *agentmetricspb.ExportMetricsServiceRequest) {
+			last = emr
+		})
+
+		if last == nil || len(last.Metrics) == 0 {
+			t.Errorf("#%d: Failed to retrieve any metrics", i)
+			continue
+		}
+
+		se := &statsExporter{
+			o: Options{ProjectID: "equivalence"},
+		}
+
+		ctx := context.Background()
+		sMD, err := se.viewToMetricDescriptor(ctx, vd.View)
+		if err != nil {
+			t.Errorf("#%d: Stats.viewToMetricDescriptor: %v", i, err)
+		}
+		pMD, err := se.protoMetricDescriptorToCreateMetricDescriptorRequest(ctx, last.Metrics[0])
+		if err != nil {
+			t.Errorf("#%d: Stats.protoMetricDescriptorToMetricDescriptor: %v", i, err)
+		}
+		if !reflect.DeepEqual(sMD, pMD) {
+			t.Errorf("MetricDescriptor Mismatch\nStats MetricDescriptor:\n\t%v\nProto MetricDescriptor:\n\t%v\n", sMD, pMD)
+		}
+
+		vdl := []*view.Data{vd}
+		sctreql := se.makeReq(vdl, maxTimeSeriesPerUpload)
+		pctreql, _ := se.protoMetricToCreateTimeSeriesRequest(ctx, last.Node, last.Resource, last.Metrics[0], maxTimeSeriesPerUpload)
+		if !reflect.DeepEqual(sctreql, pctreql) {
+			t.Errorf("#%d: TimeSeries Mismatch\nStats MetricDescriptor:\n\t%v\nProto MetricDescriptor:\n\t%v\n", i, sctreql, pctreql)
+		}
+	}
 }
 
 type metricsAgent struct {

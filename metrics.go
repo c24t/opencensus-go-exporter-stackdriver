@@ -27,6 +27,7 @@ import (
 
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"go.opencensus.io/stats"
+	"go.opencensus.io/trace"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3"
 	distributionpb "google.golang.org/genproto/googleapis/api/distribution"
@@ -42,27 +43,62 @@ import (
 
 var errNilMetric = errors.New("expecting a non-nil metric")
 
+type metricPayload struct {
+	node     *commonpb.Node
+	resource *resourcepb.Resource
+	metric   *metricspb.Metric
+}
+
 // ExportMetric exports OpenCensus Metrics to Stackdriver Monitoring.
 func (se *statsExporter) ExportMetric(ctx context.Context, node *commonpb.Node, rsc *resourcepb.Resource, metric *metricspb.Metric) error {
-	// TODO: (@odeke-em) trace this method itself.
 	if metric == nil {
 		return errNilMetric
 	}
 
-	ctsreql, err := se.protoMetricToCreateTimeSeriesRequest(ctx, node, rsc, metric, maxTimeSeriesPerUpload)
-	if err != nil {
-		return err
+	payload := &metricPayload{
+		metric:   metric,
+		resource: rsc,
+		node:     node,
+	}
+	se.protoMetricsBundler.Add(payload, 1)
+
+	return nil
+}
+
+func (se *statsExporter) handleMetricsUpload(payloads []*metricPayload) error {
+	ctx, cancel := se.o.newContextWithTimeout()
+	defer cancel()
+
+	ctx, span := trace.StartSpan(
+		ctx,
+		"contrib.go.opencensus.io/exporter/stackdriver.uploadMetrics",
+		trace.WithSampler(trace.NeverSample()),
+	)
+	defer span.End()
+
+	for _, payload := range payloads {
+		// Now create the metric descriptor remotely.
+		if err := se.createMetricDescriptorRemotely(ctx, payload.metric); err != nil {
+			span.SetStatus(trace.Status{Code: 2, Message: err.Error()})
+			return err
+		}
 	}
 
-	// Now create the metric descriptor remotely.
-	if err := se.createMetricDescriptorRemotely(ctx, metric); err != nil {
-		return err
+	for _, payload := range payloads {
+		ctsreql, err := se.protoMetricToCreateTimeSeriesRequest(ctx, payload.node, payload.resource, payload.metric, maxTimeSeriesPerUpload)
+		if err != nil {
+			span.SetStatus(trace.Status{Code: 2, Message: err.Error()})
+			return err
+		}
+		for _, req := range ctsreql {
+			if err := createTimeSeries(ctx, se.c, req); err != nil {
+				// span.SetStatus(trace.Status{Code: 2, Message: err.Error()})
+				// TODO(@odeke-em, @jbd): Don't fail fast here, batch errors?
+				// return err
+			}
+		}
 	}
 
-	// For each batch
-	for _, ctsreq := range ctsreql {
-		_ = createTimeSeries(ctx, se.c, ctsreq)
-	}
 	return nil
 }
 
