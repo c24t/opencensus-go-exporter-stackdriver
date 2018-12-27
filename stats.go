@@ -173,6 +173,9 @@ func (e *statsExporter) Flush() {
 	e.bundler.Flush()
 }
 
+func (e *statsExporter) transformViewDataToMonitoringPb(vd *view.Data) {
+}
+
 func (e *statsExporter) uploadStats(vds []*view.Data) error {
 	ctx, cancel := e.o.newContextWithTimeout()
 	defer cancel()
@@ -232,21 +235,10 @@ func (e *statsExporter) makeReq(vds []*view.Data, limit int) []*monitoringpb.Cre
 	return reqs
 }
 
-// createMeasure creates a MetricDescriptor for the given view data in Stackdriver Monitoring.
-// An error will be returned if there is already a metric descriptor created with the same name
-// but it has a different aggregation or keys.
-func (e *statsExporter) createMeasure(ctx context.Context, v *view.View) error {
-	e.createdViewsMu.Lock()
-	defer e.createdViewsMu.Unlock()
-
+func (e *statsExporter) viewToMetricDescriptor(ctx context.Context, v *view.View) (*monitoringpb.CreateMetricDescriptorRequest, error) {
 	m := v.Measure
 	agg := v.Aggregation
-	tagKeys := v.TagKeys
 	viewName := v.Name
-
-	if md, ok := e.createdViews[viewName]; ok {
-		return e.equalMeasureAggTagKeys(md, m, agg, tagKeys)
-	}
 
 	metricType := e.metricType(v)
 	var valueType metricpb.MetricDescriptor_ValueType
@@ -278,7 +270,7 @@ func (e *statsExporter) createMeasure(ctx context.Context, v *view.View) error {
 			valueType = metricpb.MetricDescriptor_DOUBLE
 		}
 	default:
-		return fmt.Errorf("unsupported aggregation type: %s", agg.Type.String())
+		return nil, fmt.Errorf("unsupported aggregation type: %s", agg.Type.String())
 	}
 
 	var displayName string
@@ -288,7 +280,7 @@ func (e *statsExporter) createMeasure(ctx context.Context, v *view.View) error {
 		displayName = e.o.GetMetricDisplayName(v)
 	}
 
-	md, err := createMetricDescriptor(ctx, e.c, &monitoringpb.CreateMetricDescriptorRequest{
+	res := &monitoringpb.CreateMetricDescriptorRequest{
 		Name: fmt.Sprintf("projects/%s", e.o.ProjectID),
 		MetricDescriptor: &metricpb.MetricDescriptor{
 			Name:        fmt.Sprintf("projects/%s/metricDescriptors/%s", e.o.ProjectID, metricType),
@@ -300,13 +292,36 @@ func (e *statsExporter) createMeasure(ctx context.Context, v *view.View) error {
 			ValueType:   valueType,
 			Labels:      newLabelDescriptors(e.defaultLabels, v.TagKeys),
 		},
-	})
+	}
+	return res, nil
+}
+
+// createMeasure creates a MetricDescriptor for the given view data in Stackdriver Monitoring.
+// An error will be returned if there is already a metric descriptor created with the same name
+// but it has a different aggregation or keys.
+func (e *statsExporter) createMeasure(ctx context.Context, v *view.View) error {
+	e.createdViewsMu.Lock()
+	defer e.createdViewsMu.Unlock()
+
+	viewName := v.Name
+
+	if md, ok := e.createdViews[viewName]; ok {
+		return e.equalMeasureAggTagKeys(md, v.Measure, v.Aggregation, v.TagKeys)
+	}
+
+	pmd, err := e.viewToMetricDescriptor(ctx, v)
 	if err != nil {
 		return err
 	}
 
-	e.createdViews[viewName] = md
-	return nil
+	dmd, err := createMetricDescriptor(ctx, e.c, pmd)
+	if err != nil {
+		return err
+	}
+
+	// Now cache the metric descriptor
+	e.createdViews[viewName] = dmd
+	return err
 }
 
 func (e *statsExporter) displayName(suffix string) string {

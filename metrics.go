@@ -26,6 +26,7 @@ import (
 	"path"
 
 	"github.com/golang/protobuf/ptypes/timestamp"
+	"go.opencensus.io/stats"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3"
 	distributionpb "google.golang.org/genproto/googleapis/api/distribution"
@@ -149,6 +150,22 @@ func labelsPerTimeSeries(defaults map[string]labelValue, labelKeys []*metricspb.
 	return labels, nil
 }
 
+func (se *statsExporter) protoMetricDescriptorToCreateMetricDescriptorRequest(ctx context.Context, metric *metricspb.Metric) (*monitoringpb.CreateMetricDescriptorRequest, error) {
+	// Otherwise, we encountered a cache-miss and
+	// should create the metric descriptor remotely.
+	inMD, err := se.protoToMonitoringMetricDescriptor(metric)
+	if err != nil {
+		return nil, err
+	}
+
+	cmrdesc := &monitoringpb.CreateMetricDescriptorRequest{
+		Name:             fmt.Sprintf("projects/%s", se.o.ProjectID),
+		MetricDescriptor: inMD,
+	}
+
+	return cmrdesc, nil
+}
+
 // createMetricDescriptorRemotely creates a metric descriptor from the OpenCensus proto metric
 // and then creates it remotely using Stackdriver's API.
 func (se *statsExporter) createMetricDescriptorRemotely(ctx context.Context, metric *metricspb.Metric) error {
@@ -248,6 +265,12 @@ func metricProseFromProto(metric *metricspb.Metric) (name, description, unit str
 	name = md.GetName()
 	unit = md.GetUnit()
 	description = md.GetDescription()
+
+	if md != nil && md.Type == metricspb.MetricDescriptor_CUMULATIVE_INT64 {
+		// If the aggregation type is count, which counts the number of recorded measurements, the unit must be "1",
+		// because this view does not apply to the recorded values.
+		unit = stats.UnitDimensionless
+	}
 
 	return
 }

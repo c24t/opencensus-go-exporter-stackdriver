@@ -36,7 +36,7 @@ func TestProtoResourceToMonitoringResource(t *testing.T) {
 		in   *resourcepb.Resource
 		want *monitoredrespb.MonitoredResource
 	}{
-		{in: nil, want: &monitoredresp.MonitoredResource{Type: "global"}},
+		{in: nil, want: &monitoredrespb.MonitoredResource{Type: "global"}},
 		{in: &resourcepb.Resource{}, want: &monitoredrespb.MonitoredResource{}},
 		{
 			in: &resourcepb.Resource{
